@@ -31,11 +31,10 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
   countSearch('issues',`author:rintify type:pr created:>=${since}`),
   countSearch('issues',`author:rintify type:issue created:>=${since}`)
  ]);
- const calendar=(await query(`query { viewer { contributionsCollection { contributionCalendar { weeks { contributionDays { date contributionCount } } } } } }`)).viewer.contributionsCollection.contributionCalendar;
  const langs={}, hours=Array(24).fill(0), hits=[];
  const names={ts:'TypeScript',tsx:'TypeScript',js:'JavaScript',jsx:'JavaScript',mjs:'JavaScript',cjs:'JavaScript',rs:'Rust',py:'Python',cs:'C#',cpp:'C++',cc:'C++',c:'C',h:'C/C++ header',hpp:'C++',java:'Java',kt:'Kotlin',go:'Go',html:'HTML',css:'CSS',scss:'SCSS',dart:'Dart',swift:'Swift',shader:'ShaderLab',hlsl:'HLSL',glsl:'GLSL',sh:'Shell',ps1:'PowerShell',lua:'Lua',sql:'SQL',gd:'GDScript',vue:'Vue',svelte:'Svelte',rb:'Ruby',php:'PHP'};
  const headers={Authorization:`Bearer ${token}`,Accept:'application/vnd.github+json','User-Agent':'rintify-profile'};
- async function api(url){const r=await fetch(url,{headers});if(!r.ok)throw Error(`GitHub API error: ${r.status}`);return r.json();}
+ async function api(url){return request(url,headers);}
  const today=new Date(); today.setUTCHours(23,59,59,999);
  const start=new Date(`${since}T00:00:00Z`);
  let windowStart=new Date(start);
@@ -46,8 +45,10 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
   const term=`author:rintify author-date:${range}`;
   let page=1, seen=0, total=0;
   do {
-   const data=await api(`https://api.github.com/search/commits?q=${encodeURIComponent(term)}&per_page=100&page=${page}`);
-   if(data.incomplete_results || data.total_count>1000) throw Error('Commit search incomplete or monthly limit exceeded');
+   let data;
+   for(let retry=0;retry<4;retry++) { data=await api(`https://api.github.com/search/commits?q=${encodeURIComponent(term)}&per_page=100&page=${page}`); if(!data.incomplete_results)break; await new Promise(resolve=>setTimeout(resolve,3000)); }
+   if(data.incomplete_results) throw Error(`Commit search incomplete for ${range}`);
+   if(data.total_count>1000) throw Error(`Commit search monthly limit exceeded for ${range}`);
    total=data.total_count; hits.push(...data.items); seen+=data.items.length; page++;
    if(data.items.length===0 && seen<total) throw Error('Commit search returned incomplete pages');
   } while(seen<total);
@@ -65,10 +66,11 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
  const top=Object.entries(langs).sort((a,b)=>b[1]-a[1]).slice(0,6), sum=Object.values(langs).reduce((a,b)=>a+b,0)||1;
  const max=Math.max(1,...hours);
  const months={};
- for(const week of calendar.weeks) for(const day of week.contributionDays) {
-  const month=day.date.slice(0,7); months[month]=(months[month]||0)+day.contributionCount;
+ for(const entry of entries) {
+  const date=entry.commit.author?.date;
+  if(date){const month=new Date(new Date(date).getTime()+9*3600000).toISOString().slice(0,7);months[month]=(months[month]||0)+1;}
  }
- const monthEntries=Object.entries(months).sort((a,b)=>a[0].localeCompare(b[0])).slice(-12);
+ const monthEntries=Object.entries(months).sort((a,b)=>a[0].localeCompare(b[0]));
  const peak=Math.max(1,...monthEntries.map(([,v])=>v));
  const graph=monthEntries.map(([month,value])=>`${month}  ${'█'.repeat(Math.round(24*value/peak))} ${value}`).join('\n');
  const bars=top.map(([name,n])=>`| ${esc(name)} | ${'█'.repeat(Math.max(1,Math.round(20*n/sum)))} | ${(n/sum*100).toFixed(1)}% |`).join('\n');
@@ -85,19 +87,19 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
 | :--- | ---: | ---: | ---: |
 | 公開・非公開 | **${commits}** | **${prs}** | **${issues}** |
 
+### 言語
+
+| 言語 | 変更行数 | 割合 |
+| :--- | :--- | ---: |
+${bars}
+
 ### 活動の軌跡
 
 \`\`\`text
 ${graph}
 \`\`\`
 
-<sub>月ごとのGitHubコントリビューション数。非公開分はGitHubのプロフィール設定に従います。</sub>
-
-### 言語
-
-| 言語 | 変更行数 | 割合 |
-| :--- | :--- | ---: |
-${bars}
+<sub>直近365日間の本人のコミットを日本時間で月ごとに集計しています。</sub>
 
 ### 活動時間 · 日本時間
 
