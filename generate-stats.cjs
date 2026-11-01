@@ -63,7 +63,7 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
   completed++;if(completed%250===0)console.log(`Processed ${completed}/${entries.length} commits`);
  }}
  await Promise.all(Array.from({length:8},worker));
- const top=Object.entries(langs).sort((a,b)=>b[1]-a[1]).slice(0,6), sum=Object.values(langs).reduce((a,b)=>a+b,0)||1;
+ const top=Object.entries(langs).sort((a,b)=>b[1]-a[1]).slice(0,10), sum=Object.values(langs).reduce((a,b)=>a+b,0)||1;
  const max=Math.max(1,...hours);
  const months={};
  for(const entry of entries) {
@@ -73,8 +73,8 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
  const monthEntries=Object.entries(months).sort((a,b)=>a[0].localeCompare(b[0]));
  const peak=Math.max(1,...monthEntries.map(([,v])=>v));
  const graph=monthEntries.map(([month,value])=>`${month}  ${'█'.repeat(Math.round(24*value/peak))} ${value}`).join('\n');
- const bars=top.map(([name,n])=>`| ${esc(name)} | ${'█'.repeat(Math.max(1,Math.round(20*n/sum)))} | ${(n/sum*100).toFixed(1)}% |`).join('\n');
- const hoursGraph=hours.map(v=>'▁▂▃▄▅▆▇█'[Math.min(7,Math.floor(8*v/(max+1)))]).join('');
+ const bars=top.map(([name,n],i)=>`| ${i+1} | ${esc(name)} | ${n.toLocaleString('en-US')} 行 |`).join('\n');
+ const hoursGraph=hours.map((v,h)=>`${String(h).padStart(2,'0')}:00  ${'█'.repeat(Math.round(24*v/max))} ${v}`).join('\n');
  const md=`<div align="center">
 
 # R I N T I F Y
@@ -89,8 +89,8 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
 
 ### 言語
 
-| 言語 | 変更行数 | 割合 |
-| :--- | :--- | ---: |
+| 順位 | 言語 | 変更行数 |
+| ---: | :--- | ---: |
 ${bars}
 
 ### 活動の軌跡
@@ -105,7 +105,6 @@ ${graph}
 
 \`\`\`text
 ${hoursGraph}
-00       06       12       18   23
 \`\`\`
 
 <sub>言語は過去365日間にアクセス可能なリポジトリへ行った本人のコミットで、拡張子から推定した追加・削除行数の合計です。時間帯は同じコミットの日時を集計しています。リポジトリ名やコードは公開しません。</sub>

@@ -1,7 +1,7 @@
 name: Refresh activity observatory
 on:
   schedule:
-    - cron: '23 18 * * *'
+    - cron: '25 17 * * *'
   workflow_dispatch:
 permissions:
   contents: write
