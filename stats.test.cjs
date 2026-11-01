@@ -1,0 +1,61 @@
+const {test} = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const {spawnSync} = require('node:child_process');
+const {loadCache, saveCache} = require('./stats-cache.cjs');
+
+test('cache authenticates ciphertext without persisting private identifiers', () => {
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'profile-cache-'));
+  try {
+    const file=path.join(dir,'cache.enc'), entries={'private-repository:sha':{TypeScript:42}};
+    saveCache(file,'test-token',entries);
+    assert.deepEqual(loadCache(file,'test-token'),entries);
+    assert.equal(fs.readFileSync(file).includes(Buffer.from('private-repository')),false);
+    assert.deepEqual(loadCache(file,'rotated-token'),{});
+    const data=fs.readFileSync(file);data[data.length-1]^=1;fs.writeFileSync(file,data);
+    assert.deepEqual(loadCache(file,'test-token'),{});
+  } finally {fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('refresh reuses details, detects changes, checkpoints, and preserves quota', () => {
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'profile-refresh-'));
+  const fixture=path.join(dir,'fetch.cjs');
+  fs.writeFileSync(fixture, `
+    global.fetch=async input=>{
+      const u=new URL(input), q=u.searchParams.get('q')||'';
+      let body;
+      const day=new Date().toISOString().slice(0,10);
+      if(u.pathname==='/rate_limit')body={resources:{core:{remaining:Number(process.env.TEST_QUOTA||5000)}}};
+      else if(u.pathname==='/search/issues')body={total_count:7};
+      else if(u.pathname==='/search/commits'){
+        const range=q.split('author-date:')[1].split('..');
+        const items=day>=range[0]&&day<=range[1] ? (process.env.TEST_SHAS||'a,b').split(',').map(sha=>({sha,repository:{id:1,owner:{login:'private-owner'},name:'private-repo'},commit:{author:{date:day+'T03:00:00Z'}}})) : [];
+        body={total_count:items.length,items};
+      }else if(u.pathname.includes('/commits/'))body={files:[{filename:'private-dir/file.ts',additions:3,deletions:2}]};
+      else throw Error('Unexpected request');
+      return {ok:true,headers:new Headers(),json:async()=>body};
+    };
+  `);
+  const run=env=>{
+    const result=spawnSync(process.execPath,['--require',fixture,path.join(__dirname,'generate-stats.cjs')],{cwd:dir,encoding:'utf8',env:{...process.env,STATS_TOKEN:'test-token',...env}});
+    assert.equal(result.status,0,result.stderr);
+    return result.stdout;
+  };
+  try {
+    assert.match(run({}),/commit detail requests: 2/);
+    assert.match(fs.readFileSync(path.join(dir,'README.md'),'utf8'),/10 行/);
+    assert.match(run({}),/commit detail requests: 0/);
+    assert.match(run({TEST_SHAS:'b,c'}),/commit detail requests: 1/);
+    assert.equal(Object.keys(loadCache(path.join(dir,'.stats-cache/aggregates.enc'),'test-token')).length,2);
+    const previous=fs.readFileSync(path.join(dir,'README.md'),'utf8');
+    assert.match(run({TEST_QUOTA:'1500'}),/preserving API quota/);
+    assert.equal(fs.readFileSync(path.join(dir,'README.md'),'utf8'),previous);
+    assert.match(run({TEST_SHAS:'b,c,d,e',STATS_DETAIL_BUDGET:'1'}),/pending: 1/);
+    assert.equal(fs.readFileSync(path.join(dir,'README.md'),'utf8'),previous);
+    assert.match(run({TEST_SHAS:'b,c,d,e'}),/commit detail requests: 1/);
+    assert.match(fs.readFileSync(path.join(dir,'README.md'),'utf8'),/20 行/);
+    assert.equal(fs.readFileSync(path.join(dir,'README.md'),'utf8').includes('private-repo'),false);
+  } finally {fs.rmSync(dir,{recursive:true,force:true});}
+});

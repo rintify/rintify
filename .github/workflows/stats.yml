@@ -11,12 +11,28 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Verify aggregation and cache
+        run: node --test stats.test.cjs
+      - name: Restore encrypted aggregate cache
+        id: stats-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .stats-cache/aggregates.enc
+          key: profile-aggregates-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: profile-aggregates-v1-
       - name: Generate aggregate profile
         env:
           STATS_TOKEN: ${{ secrets.PROFILE_STATS_TOKEN }}
         run: node generate-stats.cjs
+      - name: Save encrypted aggregate cache
+        if: ${{ always() && hashFiles('.stats-cache/aggregates.enc') != '' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .stats-cache/aggregates.enc
+          key: profile-aggregates-v1-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Commit aggregate profile
         run: |
           git config user.name 'github-actions[bot]'

@@ -1,21 +1,26 @@
 const fs = require('fs');
+const {loadCache, saveCache} = require('./stats-cache.cjs');
 const token = process.env.STATS_TOKEN;
 if (!token) throw Error('STATS_TOKEN is missing');
-async function query(q, variables={}) {
- const r=await fetch('https://api.github.com/graphql',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','User-Agent':'rintify-profile'},body:JSON.stringify({query:q,variables})});
- const j=await r.json(); if(!r.ok || j.errors) throw Error(JSON.stringify(j.errors || j)); return j.data;
-}
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
 (async()=>{
+ const cacheFile=process.env.STATS_CACHE_FILE || '.stats-cache/aggregates.enc';
+ const cache=loadCache(cacheFile, token);
+ let detailRequests=0, apiRequests=0;
+ const budget=Number(process.env.STATS_DETAIL_BUDGET || 2500);
+ const reserve=Number(process.env.STATS_CORE_RESERVE || 1500);
+ let coreRemaining=Infinity;
  const since=new Date(Date.now()-365*86400000).toISOString().slice(0,10);
  async function request(url,headers) {
   for(let attempt=0;attempt<4;attempt++){
+   apiRequests++;
    const r=await fetch(url,{headers});
+   if(r.headers.get('x-ratelimit-resource')==='core') coreRemaining=Number(r.headers.get('x-ratelimit-remaining'));
    if(r.ok)return r.json();
    const body=await r.json().catch(()=>({}));
    if((r.status===403 || r.status===429) && (r.headers.get('x-ratelimit-remaining')==='0' || /rate limit/i.test(body.message||''))){
     const reset=Number(r.headers.get('x-ratelimit-reset')||0)*1000;
-    const delay=Math.max(1500,reset-Date.now()+2000); if(delay>120000)throw Error('GitHub rate limit reset is too far away');
+    const delay=Math.max(60000,Number(r.headers.get('retry-after')||0)*1000,reset-Date.now()+2000); if(delay>120000)throw Error('GitHub rate limit reset is too far away');
     await new Promise(resolve=>setTimeout(resolve,delay));continue;
    }
    throw Error(`GitHub API error: ${r.status} ${body.message||''}`);
@@ -26,8 +31,10 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
   const url=`https://api.github.com/search/${kind}?q=${encodeURIComponent(term)}&per_page=1`;
   const j=await request(url,{Authorization:`Bearer ${token}`,Accept:'application/vnd.github+json','User-Agent':'rintify-profile'}); if(j.incomplete_results) throw Error('Search count incomplete'); return j.total_count;
  }
- const [commits,prs,issues]=await Promise.all([
-  countSearch('commits',`author:rintify author-date:>=${since}`),
+ const quota=await request('https://api.github.com/rate_limit',{Authorization:`Bearer ${token}`,'User-Agent':'rintify-profile'});
+ coreRemaining=quota.resources.core.remaining;
+ if(coreRemaining<=reserve){console.log('Profile refresh deferred: preserving API quota for other tasks.');return;}
+ const [prs,issues]=await Promise.all([
   countSearch('issues',`author:rintify type:pr created:>=${since}`),
   countSearch('issues',`author:rintify type:issue created:>=${since}`)
  ]);
@@ -55,14 +62,45 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
   windowStart=new Date(windowEnd.getTime()+1000);windowStart.setUTCHours(0,0,0,0);
  }
  const unique=new Map(hits.map(h=>[`${h.repository.id}:${h.sha}`,h]));
- const entries=[...unique.values()]; let index=0, completed=0;
- async function worker(){while(true){const i=index++;if(i>=entries.length)return;const h=entries[i];
+ const entries=[...unique.values()];
+ // Re-enumerate the rolling year to detect newly indexed commits and removals.
+ // Commit details are immutable for a repository + SHA; fetch only missing details.
+ const id=h=>`${h.repository.id}:${h.sha}`;
+ let completed=0;
+ try {
+  for(const h of entries){
+   const key=id(h);
+   if(cache[key])continue;
+   let page=1, changes={}, complete=false;
+   while(page<=30){
+    if(detailRequests>=budget || coreRemaining<=reserve)break;
+    detailRequests++;
+    const detail=await api(`https://api.github.com/repos/${encodeURIComponent(h.repository.owner.login)}/${encodeURIComponent(h.repository.name)}/commits/${h.sha}?per_page=100&page=${page}`);
+    const batch=detail.files||[];
+    for(const f of batch){const ext=(f.filename.split('.').pop()||'').toLowerCase(), name=names[ext];if(name)changes[name]=(changes[name]||0)+(f.additions||0)+(f.deletions||0);}
+    if(batch.length<100){complete=true;break;}
+    if(page===30)throw Error('Commit exceeds the API file limit; keeping the previous profile.');
+    page++;
+   }
+   if(!complete)break;
+   cache[key]=changes;
+   completed++;
+   if(completed%50===0)saveCache(cacheFile,token,cache);
+  }
+ } finally {
+  saveCache(cacheFile,token,cache);
+ }
+ const missing=entries.filter(h=>!cache[id(h)]).length;
+ console.log(`API requests: ${apiRequests}; commit detail requests: ${detailRequests}; cached commits reused: ${entries.length-missing-completed}; pending: ${missing}`);
+ if(missing){console.log('Saved progress; keeping the previous README until aggregation is complete.');return;}
+ const activeCache={};
+ for(const h of entries){
+  const changes=cache[id(h)];activeCache[id(h)]=changes;
+  for(const [name,n] of Object.entries(changes))langs[name]=(langs[name]||0)+n;
   const date=h.commit.author?.date;if(date)hours[(new Date(date).getUTCHours()+9)%24]++;
-  let page=1, files=[]; do {const detail=await api(`https://api.github.com/repos/${encodeURIComponent(h.repository.owner.login)}/${encodeURIComponent(h.repository.name)}/commits/${h.sha}?per_page=100&page=${page}`); const batch=detail.files||[];files.push(...batch);if(batch.length<100)break;page++;} while(page<=30);
-  for(const f of files){const ext=(f.filename.split('.').pop()||'').toLowerCase(), name=names[ext];if(name) langs[name]=(langs[name]||0)+(f.additions||0)+(f.deletions||0);}
-  completed++;if(completed%250===0)console.log(`Processed ${completed}/${entries.length} commits`);
- }}
- await Promise.all(Array.from({length:8},worker));
+ }
+ saveCache(cacheFile,token,activeCache);
+ const commits=entries.length;
  const top=Object.entries(langs).sort((a,b)=>b[1]-a[1]).slice(0,10), sum=Object.values(langs).reduce((a,b)=>a+b,0)||1;
  const max=Math.max(1,...hours);
  const months={};
@@ -111,5 +149,5 @@ ${hoursGraph}
 `;
  fs.writeFileSync('README.md',md);
 
-})().catch(e=>{console.error(e.message);process.exit(1)});
+})().catch(()=>{console.error('Profile refresh failed; keeping the previous README. Check API availability and credentials.');process.exit(1)});
 
