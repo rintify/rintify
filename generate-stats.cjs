@@ -18,6 +18,7 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
   countSearch('issues',`author:rintify type:pr created:>=${since}`),
   countSearch('issues',`author:rintify type:issue created:>=${since}`)
  ]);
+ const calendar=(await query(`query { viewer { contributionsCollection { contributionCalendar { weeks { contributionDays { contributionCount } } } } } }`)).viewer.contributionsCollection.contributionCalendar;
  const langs={}, hours=Array(24).fill(0); let cursor=null, repos=0;
  do {
   const data=await query(`query($cursor:String) { viewer { repositories(first: 50, after:$cursor, ownerAffiliations: OWNER, isFork:false, orderBy:{field:UPDATED_AT,direction:DESC}) { pageInfo { hasNextPage endCursor } nodes { languages(first: 10, orderBy:{field:SIZE,direction:DESC}) { edges { size node { name } } } defaultBranchRef { target { ... on Commit { history(first: 30, author:{id:"MDQ6VXNlcjg3NDYyNjA0"}) { nodes { committedDate } } } } } } } } }`,{cursor});
@@ -26,9 +27,47 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
   cursor=rs.pageInfo.hasNextPage?rs.pageInfo.endCursor:null;
  } while(cursor);
  const top=Object.entries(langs).sort((a,b)=>b[1]-a[1]).slice(0,6), sum=Object.values(langs).reduce((a,b)=>a+b,0)||1;
- const max=Math.max(1,...hours); let shapes='';
- top.forEach(([n,v],i)=>{let y=370+i*31;shapes+=`<text x="48" y="${y}" class="label">${esc(n)}</text><rect x="190" y="${y-13}" width="${Math.max(2,Math.round(260*v/sum))}" height="10" rx="5" fill="#72d8ee"/><text x="465" y="${y}" class="muted">${(v/sum*100).toFixed(1)}%</text>`;});
- hours.forEach((v,i)=>{let hh=Math.round(105*v/max);shapes+=`<rect x="${540+i*14}" y="${523-hh}" width="9" height="${Math.max(1,hh)}" rx="3" fill="#a48dff"/>`;});
- const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="960" height="610" viewBox="0 0 960 610"><style>text{font-family:Arial,sans-serif;fill:#edf7ff}.small{font-size:14px;letter-spacing:3px;fill:#86d9f2}.label{font-size:15px}.muted{font-size:13px;fill:#a3b4cd}.big{font-size:30px;font-weight:bold}.title{font-size:20px;font-weight:bold}</style><rect width="960" height="610" rx="24" fill="#101a30"/><circle cx="900" cy="70" r="110" fill="#1b2c4c"/><text x="40" y="52" class="small">RINTIFY / ACTIVITY OBSERVATORY</text><text x="70" y="130" class="big">${commits}</text><text x="70" y="158" class="muted">commits / last 365 days</text><text x="365" y="130" class="big">${prs}</text><text x="365" y="158" class="muted">pull requests / last 365 days</text><text x="700" y="130" class="big">${issues}</text><text x="700" y="158" class="muted">issues / last 365 days</text>${shapes}<text x="40" y="322" class="title">LANGUAGE CONSTELLATION</text><text x="40" y="344" class="muted">Code size across owned non-fork repositories</text><text x="540" y="322" class="title">ACTIVE HOURS / JST</text><text x="540" y="344" class="muted">Recent default-branch commits / sample</text><text x="540" y="550" class="muted">00</text><text x="704" y="550" class="muted">12</text><text x="850" y="550" class="muted">23</text><text x="40" y="585" class="muted">Public + private aggregates / no repository names or code</text></svg>`;
- fs.mkdirSync('assets',{recursive:true});fs.writeFileSync('assets/activity-v2.svg',svg);
+ const max=Math.max(1,...hours);
+ const weeks=calendar.weeks.slice(-52);
+ const shades=['·','░','▒','▓','█'];
+ const graph=Array.from({length:7},(_,day)=>weeks.map(w=>{const v=w.contributionDays[day]?.contributionCount||0; return shades[v===0?0:v<4?1:v<10?2:v<25?3:4]}).join('')).join('\n');
+ const bars=top.map(([name,n])=>`| ${esc(name)} | ${'█'.repeat(Math.max(1,Math.round(20*n/sum)))} | ${(n/sum*100).toFixed(1)}% |`).join('\n');
+ const hoursGraph=hours.map(v=>'▁▂▃▄▅▆▇█'[Math.min(7,Math.floor(8*v/(max+1)))]).join('');
+ const md=`<div align="center">
+
+# R I N T I F Y
+
+✦  ACTIVITY OBSERVATORY  ✦
+
+</div>
+
+| 過去365日 | コミット | プルリクエスト | Issue |
+| :--- | ---: | ---: | ---: |
+| 公開・非公開 | **${commits}** | **${prs}** | **${issues}** |
+
+### 活動の軌跡
+
+\`\`\`text
+${graph}
+\`\`\`
+
+<sub>薄 · ░ ▒ ▓ █ 濃 ｜GitHubのコントリビューショングラフに準拠。非公開分はGitHubのプロフィール設定に従います。</sub>
+
+### 言語
+
+| 言語 | コード量 | 割合 |
+| :--- | :--- | ---: |
+${bars}
+
+### 活動時間 · 日本時間
+
+\`\`\`text
+${hoursGraph}
+00       06       12       18   23
+\`\`\`
+
+<sub>言語は所有する非フォークリポジトリのコード量。時間帯は各リポジトリの既定ブランチにある直近30件までの自分のコミットを集計したサンプルです。リポジトリ名やコードは公開しません。</sub>
+`;
+ fs.writeFileSync('README.md',md);
+
 })().catch(e=>{console.error(e.message);process.exit(1)});
