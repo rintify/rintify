@@ -1,0 +1,28 @@
+name: Refresh activity observatory
+on:
+  schedule:
+    - cron: '23 18 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: profile-stats
+  cancel-in-progress: false
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Generate aggregate image
+        env:
+          STATS_TOKEN: ${{ secrets.PROFILE_STATS_TOKEN }}
+        run: node generate-stats.cjs
+      - name: Commit aggregate image
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add assets/activity.svg
+          if ! git diff --cached --quiet; then
+            git commit -m 'Refresh profile activity'
+            git push
+          fi
