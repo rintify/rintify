@@ -8,6 +8,8 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
  const cacheFile=process.env.STATS_CACHE_FILE || '.stats-cache/aggregates.enc';
  const cache=loadCache(cacheFile, cacheKey);
  let detailRequests=0, apiRequests=0;
+ let phase='quota check';
+ const report=(reason)=>{console.error(`Profile refresh failed during ${phase}: ${reason}. Previous README retained.`);};
  const budget=Number(process.env.STATS_DETAIL_BUDGET || 2500);
  const reserve=Number(process.env.STATS_CORE_RESERVE || 1500);
  let coreRemaining=Infinity;
@@ -24,7 +26,7 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
     const delay=Math.max(60000,Number(r.headers.get('retry-after')||0)*1000,reset-Date.now()+2000); if(delay>120000)throw Error('GitHub rate limit reset is too far away');
     await new Promise(resolve=>setTimeout(resolve,delay));continue;
    }
-   throw Error(`GitHub API error: ${r.status} ${body.message||''}`);
+   throw Error(`GitHub API returned HTTP ${r.status}`);
   }
   throw Error('GitHub rate limit retry exhausted');
  }
@@ -35,6 +37,7 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
  const quota=await request('https://api.github.com/rate_limit',{Authorization:`Bearer ${token}`,'User-Agent':'rintify-profile'});
  coreRemaining=quota.resources.core.remaining;
  if(coreRemaining<=reserve){console.log('Profile refresh deferred: preserving API quota for other tasks.');return;}
+ phase='issue and pull request search';
  const [prs,issues]=await Promise.all([
   countSearch('issues',`author:rintify type:pr created:>=${since}`),
   countSearch('issues',`author:rintify type:issue created:>=${since}`)
@@ -43,6 +46,7 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
  const names={ts:'TypeScript',tsx:'TypeScript',js:'JavaScript',jsx:'JavaScript',mjs:'JavaScript',cjs:'JavaScript',rs:'Rust',py:'Python',cs:'C#',cpp:'C++',cc:'C++',c:'C',h:'C/C++ header',hpp:'C++',java:'Java',kt:'Kotlin',go:'Go',html:'HTML',css:'CSS',scss:'SCSS',dart:'Dart',swift:'Swift',shader:'ShaderLab',hlsl:'HLSL',glsl:'GLSL',sh:'Shell',ps1:'PowerShell',lua:'Lua',sql:'SQL',gd:'GDScript',vue:'Vue',svelte:'Svelte',rb:'Ruby',php:'PHP'};
  const headers={Authorization:`Bearer ${token}`,Accept:'application/vnd.github+json','User-Agent':'rintify-profile'};
  async function api(url){return request(url,headers);}
+ phase='commit search';
  const today=new Date(); today.setUTCHours(23,59,59,999);
  const start=new Date(`${since}T00:00:00Z`);
  let windowStart=new Date(start);
@@ -68,6 +72,7 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
  // Commit details are immutable for a repository + SHA; fetch only missing details.
  const id=h=>`${h.repository.id}:${h.sha}`;
  let completed=0;
+ phase='commit detail retrieval';
  try {
   for(const h of entries){
    const key=id(h);
@@ -86,8 +91,12 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
    if(!complete)break;
    cache[key]=changes;
    completed++;
-   if(completed%50===0)saveCache(cacheFile,cacheKey,cache);
+   if(completed%50===0){saveCache(cacheFile,cacheKey,cache);console.log(`Saved ${completed} new commit aggregates.`);}
   }
+ } catch(e) {
+  const safe=/^(GitHub API returned HTTP \d{3}|GitHub rate limit reset is too far away|GitHub rate limit retry exhausted|Commit exceeds the API file limit; keeping the previous profile\.)$/.test(e.message) ? e.message : 'unexpected error';
+  report(`${safe}; completed ${completed} commits`);
+  process.exitCode=1;return;
  } finally {
   saveCache(cacheFile,cacheKey,cache);
  }
@@ -150,5 +159,5 @@ ${hoursGraph}
 `;
  fs.writeFileSync('README.md',md);
 
-})().catch(()=>{console.error('Profile refresh failed; keeping the previous README. Check API availability and credentials.');process.exit(1)});
+})().catch(e=>{const m=e.message||'';const safe=/^(GitHub API returned HTTP \d{3}|GitHub rate limit reset is too far away|GitHub rate limit retry exhausted|Search count incomplete|Commit search incomplete for \d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}|Commit search monthly limit exceeded for \d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}|Commit search returned incomplete pages|Cache authentication failed; remove the damaged or obsolete encrypted cache before retrying\.|STATS_CACHE_KEY must be an independent random 32-byte hex key)$/.test(m)?m:'unexpected error';console.error(`Profile refresh failed: ${safe}. Previous README retained.`);process.exit(1)});
 
