@@ -6,6 +6,11 @@ const path = require('node:path');
 const {spawnSync} = require('node:child_process');
 const {loadCache, saveCache} = require('./stats-cache.cjs');
 const testKey = 'ab'.repeat(32);
+test('Git numstat handles root changes, renames, binary files and unusual paths', () => {
+  const {parseNumstat}=require('./git-stats.cjs');
+  const data='3\t2\tfile.ts\0'+'0\t0\t\0old.ts\0new.ts\0'+'-\t-\timage.png\0'+'7\t1\tdir/new\nfile.py\0';
+  assert.deepEqual(parseNumstat(data,{ts:'TypeScript',py:'Python'}),{TypeScript:5,Python:8});
+});
 
 test('generator rejects classic tokens and missing independent keys before network access', () => {
   for (const env of [

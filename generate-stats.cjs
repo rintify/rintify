@@ -1,4 +1,5 @@
 const fs = require('fs');
+const {gitChanges} = require('./git-stats.cjs');
 const {loadCache, saveCache} = require('./stats-cache.cjs');
 const token = process.env.STATS_TOKEN;
 if (!token || !token.startsWith('github_pat_')) throw Error('Configure a dedicated fine-grained read-only token; CLI/classic tokens are not accepted.');
@@ -85,7 +86,10 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
     const batch=detail.files||[];
     for(const f of batch){const ext=(f.filename.split('.').pop()||'').toLowerCase(), name=names[ext];if(name)changes[name]=(changes[name]||0)+(f.additions||0)+(f.deletions||0);}
     if(batch.length<100){complete=true;break;}
-    if(page===30)throw Error('Commit exceeds the API file limit; keeping the previous profile.');
+    if(page===30){
+     console.log('Large commit: collecting full changes with Git.');
+     changes=gitChanges(h,token,names);complete=true;break;
+    }
     page++;
    }
    if(!complete)break;
@@ -94,7 +98,7 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
    if(completed%50===0){saveCache(cacheFile,cacheKey,cache);console.log(`Saved ${completed} new commit aggregates.`);}
   }
  } catch(e) {
-  const safe=/^(GitHub API returned HTTP \d{3}|GitHub rate limit reset is too far away|GitHub rate limit retry exhausted|Commit exceeds the API file limit; keeping the previous profile\.)$/.test(e.message) ? e.message : 'unexpected error';
+  const safe=/^(Git fallback failed|GitHub API returned HTTP \d{3}|GitHub rate limit reset is too far away|GitHub rate limit retry exhausted|Commit exceeds the API file limit; keeping the previous profile\.)$/.test(e.message) ? e.message : 'unexpected error';
   report(`${safe}; completed ${completed} commits`);
   process.exitCode=1;return;
  } finally {
@@ -159,5 +163,5 @@ ${hoursGraph}
 `;
  fs.writeFileSync('README.md',md);
 
-})().catch(e=>{const m=e.message||'';const safe=/^(GitHub API returned HTTP \d{3}|GitHub rate limit reset is too far away|GitHub rate limit retry exhausted|Search count incomplete|Commit search incomplete for \d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}|Commit search monthly limit exceeded for \d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}|Commit search returned incomplete pages|Cache authentication failed; remove the damaged or obsolete encrypted cache before retrying\.|STATS_CACHE_KEY must be an independent random 32-byte hex key)$/.test(m)?m:'unexpected error';console.error(`Profile refresh failed: ${safe}. Previous README retained.`);process.exit(1)});
+})().catch(e=>{const m=e.message||'';const safe=/^(Git fallback failed|GitHub API returned HTTP \d{3}|GitHub rate limit reset is too far away|GitHub rate limit retry exhausted|Search count incomplete|Commit search incomplete for \d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}|Commit search monthly limit exceeded for \d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}|Commit search returned incomplete pages|Cache authentication failed; remove the damaged or obsolete encrypted cache before retrying\.|STATS_CACHE_KEY must be an independent random 32-byte hex key)$/.test(m)?m:'unexpected error';console.error(`Profile refresh failed: ${safe}. Previous README retained.`);process.exit(1)});
 
