@@ -1,11 +1,12 @@
 const fs = require('fs');
 const {loadCache, saveCache} = require('./stats-cache.cjs');
 const token = process.env.STATS_TOKEN;
-if (!token) throw Error('STATS_TOKEN is missing');
+if (!token || !token.startsWith('github_pat_')) throw Error('Configure a dedicated fine-grained read-only token; CLI/classic tokens are not accepted.');
+const cacheKey = process.env.STATS_CACHE_KEY;
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
 (async()=>{
  const cacheFile=process.env.STATS_CACHE_FILE || '.stats-cache/aggregates.enc';
- const cache=loadCache(cacheFile, token);
+ const cache=loadCache(cacheFile, cacheKey);
  let detailRequests=0, apiRequests=0;
  const budget=Number(process.env.STATS_DETAIL_BUDGET || 2500);
  const reserve=Number(process.env.STATS_CORE_RESERVE || 1500);
@@ -85,10 +86,10 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
    if(!complete)break;
    cache[key]=changes;
    completed++;
-   if(completed%50===0)saveCache(cacheFile,token,cache);
+   if(completed%50===0)saveCache(cacheFile,cacheKey,cache);
   }
  } finally {
-  saveCache(cacheFile,token,cache);
+  saveCache(cacheFile,cacheKey,cache);
  }
  const missing=entries.filter(h=>!cache[id(h)]).length;
  console.log(`API requests: ${apiRequests}; commit detail requests: ${detailRequests}; cached commits reused: ${entries.length-missing-completed}; pending: ${missing}`);
@@ -99,7 +100,7 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
   for(const [name,n] of Object.entries(changes))langs[name]=(langs[name]||0)+n;
   const date=h.commit.author?.date;if(date)hours[(new Date(date).getUTCHours()+9)%24]++;
  }
- saveCache(cacheFile,token,activeCache);
+ saveCache(cacheFile,cacheKey,activeCache);
  const commits=entries.length;
  const top=Object.entries(langs).sort((a,b)=>b[1]-a[1]).slice(0,10), sum=Object.values(langs).reduce((a,b)=>a+b,0)||1;
  const max=Math.max(1,...hours);

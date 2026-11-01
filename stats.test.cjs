@@ -5,17 +5,32 @@ const os = require('node:os');
 const path = require('node:path');
 const {spawnSync} = require('node:child_process');
 const {loadCache, saveCache} = require('./stats-cache.cjs');
+const testKey = 'ab'.repeat(32);
+
+test('generator rejects classic tokens and missing independent keys before network access', () => {
+  for (const env of [
+    {STATS_TOKEN:'ghp_fixture',STATS_CACHE_KEY:testKey},
+    {STATS_TOKEN:'github_pat_fixture',STATS_CACHE_KEY:''},
+  ]) {
+    const result=spawnSync(process.execPath,[path.join(__dirname,'generate-stats.cjs')],{
+      encoding:'utf8',env:{...process.env,...env},
+    });
+    assert.notEqual(result.status,0);
+    assert.equal(result.stderr.includes(env.STATS_TOKEN),false);
+  }
+});
 
 test('cache authenticates ciphertext without persisting private identifiers', () => {
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'profile-cache-'));
   try {
     const file=path.join(dir,'cache.enc'), entries={'private-repository:sha':{TypeScript:42}};
-    saveCache(file,'test-token',entries);
-    assert.deepEqual(loadCache(file,'test-token'),entries);
+    saveCache(file,testKey,entries);
+    assert.deepEqual(loadCache(file,testKey),entries);
     assert.equal(fs.readFileSync(file).includes(Buffer.from('private-repository')),false);
-    assert.deepEqual(loadCache(file,'rotated-token'),{});
+    assert.throws(()=>loadCache(file,'cd'.repeat(32)),/authentication failed/);
+    assert.throws(()=>loadCache(file,'test-token'),/32-byte hex key/);
     const data=fs.readFileSync(file);data[data.length-1]^=1;fs.writeFileSync(file,data);
-    assert.deepEqual(loadCache(file,'test-token'),{});
+    assert.throws(()=>loadCache(file,testKey),/authentication failed/);
   } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });
 
@@ -39,16 +54,16 @@ test('refresh reuses details, detects changes, checkpoints, and preserves quota'
     };
   `);
   const run=env=>{
-    const result=spawnSync(process.execPath,['--require',fixture,path.join(__dirname,'generate-stats.cjs')],{cwd:dir,encoding:'utf8',env:{...process.env,STATS_TOKEN:'test-token',...env}});
+    const result=spawnSync(process.execPath,['--require',fixture,path.join(__dirname,'generate-stats.cjs')],{cwd:dir,encoding:'utf8',env:{...process.env,STATS_TOKEN:'github_pat_fixture',STATS_CACHE_KEY:testKey,...env}});
     assert.equal(result.status,0,result.stderr);
     return result.stdout;
   };
   try {
     assert.match(run({}),/commit detail requests: 2/);
     assert.match(fs.readFileSync(path.join(dir,'README.md'),'utf8'),/10 行/);
-    assert.match(run({}),/commit detail requests: 0/);
+    assert.match(run({STATS_TOKEN:'github_pat_rotated_fixture'}),/commit detail requests: 0/);
     assert.match(run({TEST_SHAS:'b,c'}),/commit detail requests: 1/);
-    assert.equal(Object.keys(loadCache(path.join(dir,'.stats-cache/aggregates.enc'),'test-token')).length,2);
+    assert.equal(Object.keys(loadCache(path.join(dir,'.stats-cache/aggregates.enc'),testKey)).length,2);
     const previous=fs.readFileSync(path.join(dir,'README.md'),'utf8');
     assert.match(run({TEST_QUOTA:'1500'}),/preserving API quota/);
     assert.equal(fs.readFileSync(path.join(dir,'README.md'),'utf8'),previous);
