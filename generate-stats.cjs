@@ -31,7 +31,7 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
   countSearch('issues',`author:rintify type:pr created:>=${since}`),
   countSearch('issues',`author:rintify type:issue created:>=${since}`)
  ]);
- const calendar=(await query(`query { viewer { contributionsCollection { contributionCalendar { weeks { contributionDays { contributionCount } } } } } }`)).viewer.contributionsCollection.contributionCalendar;
+ const calendar=(await query(`query { viewer { contributionsCollection { contributionCalendar { weeks { contributionDays { date contributionCount } } } } } }`)).viewer.contributionsCollection.contributionCalendar;
  const langs={}, hours=Array(24).fill(0), hits=[];
  const names={ts:'TypeScript',tsx:'TypeScript',js:'JavaScript',jsx:'JavaScript',mjs:'JavaScript',cjs:'JavaScript',rs:'Rust',py:'Python',cs:'C#',cpp:'C++',cc:'C++',c:'C',h:'C/C++ header',hpp:'C++',java:'Java',kt:'Kotlin',go:'Go',html:'HTML',css:'CSS',scss:'SCSS',dart:'Dart',swift:'Swift',shader:'ShaderLab',hlsl:'HLSL',glsl:'GLSL',sh:'Shell',ps1:'PowerShell',lua:'Lua',sql:'SQL',gd:'GDScript',vue:'Vue',svelte:'Svelte',rb:'Ruby',php:'PHP'};
  const headers={Authorization:`Bearer ${token}`,Accept:'application/vnd.github+json','User-Agent':'rintify-profile'};
@@ -64,9 +64,13 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
  await Promise.all(Array.from({length:8},worker));
  const top=Object.entries(langs).sort((a,b)=>b[1]-a[1]).slice(0,6), sum=Object.values(langs).reduce((a,b)=>a+b,0)||1;
  const max=Math.max(1,...hours);
- const weeks=calendar.weeks.slice(-52);
- const shades=['·','░','▒','▓','█'];
- const graph=Array.from({length:7},(_,day)=>weeks.map(w=>{const v=w.contributionDays[day]?.contributionCount||0; return shades[v===0?0:v<4?1:v<10?2:v<25?3:4]}).join('')).join('\n');
+ const months={};
+ for(const week of calendar.weeks) for(const day of week.contributionDays) {
+  const month=day.date.slice(0,7); months[month]=(months[month]||0)+day.contributionCount;
+ }
+ const monthEntries=Object.entries(months).sort((a,b)=>a[0].localeCompare(b[0])).slice(-12);
+ const peak=Math.max(1,...monthEntries.map(([,v])=>v));
+ const graph=monthEntries.map(([month,value])=>`${month}  ${'█'.repeat(Math.round(24*value/peak))} ${value}`).join('\n');
  const bars=top.map(([name,n])=>`| ${esc(name)} | ${'█'.repeat(Math.max(1,Math.round(20*n/sum)))} | ${(n/sum*100).toFixed(1)}% |`).join('\n');
  const hoursGraph=hours.map(v=>'▁▂▃▄▅▆▇█'[Math.min(7,Math.floor(8*v/(max+1)))]).join('');
  const md=`<div align="center">
@@ -87,7 +91,7 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
 ${graph}
 \`\`\`
 
-<sub>薄 · ░ ▒ ▓ █ 濃 ｜GitHubのコントリビューショングラフに準拠。非公開分はGitHubのプロフィール設定に従います。</sub>
+<sub>月ごとのGitHubコントリビューション数。非公開分はGitHubのプロフィール設定に従います。</sub>
 
 ### 言語
 
