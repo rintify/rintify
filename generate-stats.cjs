@@ -125,7 +125,9 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
  const monthEntries=Object.entries(months).sort((a,b)=>a[0].localeCompare(b[0]));
  const peak=Math.max(1,...monthEntries.map(([,v])=>v));
  const graph=monthEntries.map(([month,value])=>`${month}  ${'█'.repeat(Math.round(24*value/peak))} ${value}`).join('\n');
- const bars=top.map(([name,n],i)=>`| ${i+1} | ${esc(name)} | ${n.toLocaleString('en-US')} 行 |`).join('\n');
+ const languagePeak=Math.max(1,...top.map(([,n])=>n));
+ const languageBar=n=>{const units=Math.max(1,Math.round(256*n/languagePeak));return '█'.repeat(Math.floor(units/8))+(' ▏▎▍▌▋▊▉'[units%8].trim());};
+ const bars=top.map(([name,n],i)=>`| ${i+1} | ${esc(name)} | ${n.toLocaleString('en-US')} 行 | \`${languageBar(n)}\` |`).join('\n');
  const hoursGraph=hours.map((v,h)=>`${String(h).padStart(2,'0')}:00  ${'█'.repeat(Math.round(24*v/max))} ${v}`).join('\n');
  const md=`<div align="center">
 
@@ -141,8 +143,8 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
 
 ### 言語
 
-| 順位 | 言語 | 変更行数 |
-| ---: | :--- | ---: |
+| 順位 | 言語 | 変更行数 | グラフ |
+| ---: | :--- | ---: | :--- |
 ${bars}
 
 ### 活動の軌跡
